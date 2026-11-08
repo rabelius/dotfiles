@@ -108,6 +108,10 @@ _dotfiles_dir="${${(%):-%x}:A:h}"
 if [[ -f "${_dotfiles_dir}/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh" ]]; then
   source "${_dotfiles_dir}/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh"
 fi
+
+# --- Zsh Autosuggestions ---
+export ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=#808080'
+
 # Syntax highlighting must be sourced last
 if [[ -f "${_dotfiles_dir}/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ]]; then
   source "${_dotfiles_dir}/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
