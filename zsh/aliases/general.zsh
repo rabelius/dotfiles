@@ -1,4 +1,4 @@
- General aliases
+# General aliases
 
 # Navigation
 alias ..="cd .."
