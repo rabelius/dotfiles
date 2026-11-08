@@ -1,0 +1,19 @@
+
+
+name: Town
+root: ~/
+
+windows:
+  - gt:
+      layout: main-vertical
+      root: ~/gt
+      panes:
+        - 
+  - symbol-manager: 
+      root: ~/gt/symbol_manager/crew/lowlevel
+      panes:
+        -
+  - dotfiles: 
+      root: ~/gt/dotfiles/crew/itguy
+      panes:
+        -

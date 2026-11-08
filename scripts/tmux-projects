@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+#
+# tmux-projects — fzf-powered tmuxinator project picker
+#
+# Bound to Alt+t in tmux.conf. Lists tmuxinator projects with smart preview:
+#   - Active projects: live pane capture (like sessionizer)
+#   - Inactive projects: YAML config with bat/cat syntax highlighting
+#
+# Keybindings:
+#   Enter       Start/switch to project
+#   Esc         Quit
+#   Alt+o       Toggle between session preview and config file preview
+#   Alt+e       Edit config in nano (asks to restart project after save)
+#   Alt+p       Toggle preview on/off
+#   Alt+w       Cycle preview window position
+#   ?           Toggle preview
+#   PgUp/PgDn   Scroll preview
+#   Home/End    Jump to top/bottom of preview
+#
+# Works for both:
+#   - Switching to or launching projects (when inside tmux)
+#   - Starting a project session (when outside tmux)
+
+set -euo pipefail
+
+PROJECTS_DIR="${TMUXINATOR_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/tmuxinator}"
+
+# Bail if no tmuxinator projects exist
+if [ ! -d "$PROJECTS_DIR" ] || ! ls "$PROJECTS_DIR"/*.yml &>/dev/null; then
+  echo "No tmuxinator projects found in $PROJECTS_DIR" >&2
+  sleep 1
+  exit 0
+fi
+
+# Collect currently-running tmux session names for active detection
+active_sessions=""
+if tmux list-sessions &>/dev/null 2>&1; then
+  active_sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+fi
+
+# Theme-aware symbols (mirrors tmux-sessionizer conventions)
+_cur_marker="${THEME_EMOJI_SESSION_CURRENT:-◆}"
+_att_sym="${THEME_EMOJI_SESSION_ATTACHED:-active}"
+_age_sym="${THEME_EMOJI_SESSION_AGE:-}"
+_session_prompt="${THEME_EMOJI_SESSION_PROMPT:-project ▶ }"
+_session_pointer="${THEME_EMOJI_SESSION_POINTER:-▶}"
+_fzf_colors="${THEME_FZF_COLORS:-fg:-1,bg:-1,hl:#5f87af,fg+:#d0d0d0,bg+:#262626,hl+:#5fd7ff,info:#afaf87,prompt:#5f87af,pointer:#af5fff,marker:#87ff00,spinner:#af5fff,header:#87afaf,border:#3a3a3a,gutter:-1}"
+
+# Build project list: show active marker for projects with a live tmux session
+project_list=$(
+  for yml in "$PROJECTS_DIR"/*.yml; do
+    name="${yml%.yml}"
+    name="${name##*/}"
+    if echo "$active_sessions" | grep -qxF "$name"; then
+      printf "%s  %s\n" "$name" "$_att_sym"
+    else
+      printf "%s\n" "$name"
+    fi
+  done
+)
+
+if [ -z "$project_list" ]; then
+  echo "No tmuxinator projects found." >&2
+  sleep 1
+  exit 0
+fi
+
+# Preview mode state file (toggled by Alt+o)
+_preview_mode_file=$(mktemp /tmp/tmux-projects-preview.XXXXXX)
+echo "auto" > "$_preview_mode_file"
+trap 'rm -f "$_preview_mode_file"' EXIT
+
+# Preview script: uses $_preview_mode_file to choose session vs config view
+# Exported so fzf subshells can access it
+export _PREVIEW_MODE_FILE="$_preview_mode_file"
+export _PROJECTS_DIR="$PROJECTS_DIR"
+
+preview_cmd='
+  entry={}
+  project="${entry%%  *}"
+  icon="${THEME_EMOJI_SESSION_POINTER:-▶}"
+  yml="${_PROJECTS_DIR}/${project}.yml"
+  mode=$(cat "$_PREVIEW_MODE_FILE" 2>/dev/null || echo "auto")
+
+  show_session() {
+    cwd=$(tmux display-message -t "$project" -p "#{pane_current_path}" 2>/dev/null || echo "?")
+    cmd=$(tmux display-message -t "$project" -p "#{pane_current_command}" 2>/dev/null || echo "?")
+    printf "\033[1;35m%s %s\033[0m  \033[0;36m%s\033[0m  \033[0;33m(%s)\033[0m\n" "$icon" "$project" "$cwd" "$cmd"
+    echo "────────────────────────────────────────────"
+    tmux capture-pane -t "$project" -p -e -J -S - 2>/dev/null || echo "(no preview available)"
+  }
+
+  show_config() {
+    printf "\033[1;35m%s %s\033[0m  \033[0;33m(config)\033[0m\n" "$icon" "$project"
+    echo "────────────────────────────────────────────"
+    if command -v bat &>/dev/null; then
+      bat --color=always --style=plain --language=yaml "$yml" 2>/dev/null || cat "$yml"
+    else
+      cat "$yml"
+    fi
+  }
+
+  case "$mode" in
+    session)
+      if tmux has-session -t "$project" 2>/dev/null; then
+        show_session
+      else
+        printf "\033[0;33m(no active session — showing config)\033[0m\n\n"
+        show_config
+      fi
+      ;;
+    config)
+      show_config
+      ;;
+    auto|*)
+      if tmux has-session -t "$project" 2>/dev/null; then
+        show_session
+      else
+        show_config
+      fi
+      ;;
+  esac
+'
+
+# Toggle preview mode script (Alt+o)
+toggle_cmd="
+  current=\$(cat \"$_preview_mode_file\" 2>/dev/null || echo auto)
+  case \"\$current\" in
+    auto|session) echo config > \"$_preview_mode_file\" ;;
+    config)       echo session > \"$_preview_mode_file\" ;;
+  esac
+"
+
+# Edit config script (Alt+e): opens nano, then offers restart if file changed
+edit_cmd="
+  entry={}
+  project=\"\${entry%%  *}\"
+  yml=\"${PROJECTS_DIR}/\${project}.yml\"
+  if [ -f \"\$yml\" ]; then
+    _hash_before=\$(md5sum \"\$yml\" | cut -d' ' -f1)
+    nano \"\$yml\" < /dev/tty > /dev/tty
+    _hash_after=\$(md5sum \"\$yml\" | cut -d' ' -f1)
+    if [ \"\$_hash_before\" != \"\$_hash_after\" ] && tmux has-session -t \"\$project\" 2>/dev/null; then
+      printf 'Restart project %s? [y/N] ' \"\$project\" > /dev/tty
+      read -r answer < /dev/tty
+      if [ \"\$answer\" = 'y' ] || [ \"\$answer\" = 'Y' ]; then
+        tmuxinator stop \"\$project\" 2>/dev/null || true
+        tmuxinator start \"\$project\" --no-stdin 2>/dev/null || true
+        echo \"Project \$project restarted.\" > /dev/tty
+        sleep 1
+      fi
+    fi
+  fi
+"
+
+preview_pos="down:70%:wrap:follow"
+
+header_text="tmuxinator projects"$'\n'"Enter:start/switch  Esc:quit  ?:preview"$'\n'"Alt+o:toggle session/config  Alt+e:edit config"$'\n'"PgUp/Dn:scroll  Alt+p:toggle  Alt+w:cycle"
+
+selected=$(
+  echo "$project_list" |
+  fzf \
+    --reverse \
+    --border rounded \
+    --border-label " $_cur_marker tmuxinator " \
+    --border-label-pos 2 \
+    --info inline \
+    --header "$header_text" \
+    --prompt "$_session_prompt" \
+    --pointer "$_session_pointer" \
+    --preview "$preview_cmd" \
+    --preview-window "$preview_pos" \
+    --height 100% \
+    --bind "page-up:preview-half-page-up,page-down:preview-half-page-down" \
+    --bind "home:preview-top,end:preview-bottom" \
+    --bind "alt-p:toggle-preview,alt-w:change-preview-window(right:70%|right:50%|down:80%|hidden)" \
+    --bind "?:toggle-preview" \
+    --bind "alt-o:execute-silent($toggle_cmd)+refresh-preview" \
+    --bind "alt-e:execute($edit_cmd)+refresh-preview" \
+    --cycle \
+    --no-mouse \
+    --color "$_fzf_colors" \
+  || true
+)
+unset _session_prompt _session_pointer _fzf_colors _cur_marker _att_sym _age_sym
+
+# Nothing selected (user pressed Escape)
+if [ -z "$selected" ]; then
+  exit 0
+fi
+
+# Strip the active status suffix to get the bare project name
+target="${selected%%  *}"
+
+if tmux has-session -t "$target" 2>/dev/null; then
+  # Session already running — switch or attach
+  if [ -n "${TMUX:-}" ]; then
+    tmux switch-client -t "$target"
+  else
+    exec tmux attach-session -t "$target"
+  fi
+else
+  # Session not running — start it with tmuxinator
+  if ! command -v tmuxinator &>/dev/null; then
+    echo "tmuxinator not installed. Run: sudo apt install tmuxinator" >&2
+    sleep 2
+    exit 1
+  fi
+  if [ -n "${TMUX:-}" ]; then
+    tmuxinator start "$target" --no-stdin
+    tmux switch-client -t "$target" 2>/dev/null || true
+  else
+    # Outside tmux — let tmuxinator attach directly
+    exec </dev/tty
+    exec <&1
+    exec tmuxinator start "$target"
+  fi
+fi

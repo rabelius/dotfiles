@@ -1,0 +1,12 @@
+
+name: tslam
+root: ~/gt/tslam/crew/cpp
+
+windows:
+  - ws:
+      panes:
+        - 
+  - test: 
+      panes:
+        - 
+        - 

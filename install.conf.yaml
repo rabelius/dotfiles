@@ -1,0 +1,32 @@
+- defaults:
+    link:
+      create: true
+      relink: true
+      force: true
+
+- clean: ['~']
+
+- shell:
+    - [git submodule update --init --recursive, Installing submodules]
+
+- link:
+    ~/.zshrc: zsh/zshrc
+    ~/.zsh/aliases: zsh/aliases
+    ~/.zsh/functions: zsh/functions
+    ~/.tmux.conf: tmux/tmux.conf
+    ~/.tmux.conf.local: tmux/tmux.conf.local
+    ~/.tmux/plugins/tpm: tmux/plugins/tpm
+    ~/.fzf.zsh: fzf/fzf.zsh
+    ~/.gitconfig: git/gitconfig
+    ~/.gitignore_global: git/gitignore_global
+    ~/.config/starship.toml: starship/starship.toml
+    ~/.config/dotfiles/themes: themes
+    ~/.local/bin/tmux-sessionizer: scripts/tmux-sessionizer
+    ~/.local/bin/tmux-projects: scripts/tmux-projects
+    ~/.local/bin/tmux-metrics: scripts/tmux-metrics
+    ~/.local/bin/tmux-net-stat: scripts/tmux-net-stat
+    ~/.config/tmuxinator: tmuxinator
+    ~/.config/kitty/kitty.conf: kitty/kitty.conf
+
+- shell:
+    - ['TMUX_PLUGIN_MANAGER_PATH=~/.tmux/plugins ~/.tmux/plugins/tpm/bin/install_plugins || true', Installing tmux plugins]
